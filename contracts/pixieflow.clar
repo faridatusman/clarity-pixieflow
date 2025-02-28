@@ -7,11 +7,13 @@
 (define-constant err-unauthorized (err u102))  
 (define-constant err-insufficient-shares (err u103))
 (define-constant err-invalid-royalty (err u104))
+(define-constant err-zero-amount (err u105))
+(define-constant err-zero-payment (err u106))
+(define-constant err-invalid-recipient (err u107))
 
-;; Data vars
+;; Events
 (define-data-var next-asset-id uint u0)
 
-;; Data maps
 (define-map assets
     uint
     {
@@ -55,6 +57,20 @@
     }
 )
 
+;; Private Functions
+(define-private (validate-transfer-params 
+    (amount uint) 
+    (payment uint) 
+    (recipient principal)
+  )
+  (begin
+    (asserts! (> amount u0) err-zero-amount)
+    (asserts! (> payment u0) err-zero-payment)
+    (asserts! (not (is-eq tx-sender recipient)) err-invalid-recipient)
+    (ok true)
+  )
+)
+
 ;; Create new fractionalized asset with metadata
 (define-public (create-asset 
     (name (string-ascii 64)) 
@@ -68,6 +84,7 @@
         (
             (asset-id (var-get next-asset-id))
         )
+        (asserts! (> total-shares u0) err-zero-amount)
         (asserts! (<= royalty-percent u100) err-invalid-royalty)
         (map-set assets asset-id {
             creator: tx-sender,
@@ -84,6 +101,7 @@
         })
         (map-set shares {asset-id: asset-id, owner: tx-sender} total-shares)
         (var-set next-asset-id (+ asset-id u1))
+        (print {event: "asset-created", asset-id: asset-id, creator: tx-sender})
         (ok asset-id)
     )
 )
@@ -96,31 +114,35 @@
             (asset (unwrap! (map-get? assets asset-id) err-invalid-asset))
             (royalty-amount (/ (* payment (get royalty-percent asset)) u100))
         )
-        (if (<= amount sender-shares)
-            (begin
-                (map-set shares {asset-id: asset-id, owner: tx-sender} 
-                    (- sender-shares amount))
-                (map-set shares {asset-id: asset-id, owner: recipient}
-                    (+ (default-to u0 (map-get? shares {asset-id: asset-id, owner: recipient})) amount))
-                
-                ;; Process royalty payment
-                (map-set royalty-payments asset-id {
-                    total-paid: (+ (default-to u0 (get total-paid (map-get? royalty-payments asset-id))) royalty-amount),
-                    last-paid: block-height
-                })
-                (map-set assets asset-id 
-                    (merge asset {revenue-balance: (+ (get revenue-balance asset) royalty-amount)}))
-                
-                (ok true)
-            )
-            err-insufficient-shares
-        )
+        (try! (validate-transfer-params amount payment recipient))
+        (asserts! (>= sender-shares amount) err-insufficient-shares)
+        
+        (map-set shares {asset-id: asset-id, owner: tx-sender} 
+            (- sender-shares amount))
+        (map-set shares {asset-id: asset-id, owner: recipient}
+            (+ (default-to u0 (map-get? shares {asset-id: asset-id, owner: recipient})) amount))
+        
+        ;; Process royalty payment
+        (map-set royalty-payments asset-id {
+            total-paid: (+ (default-to u0 (get total-paid (map-get? royalty-payments asset-id))) royalty-amount),
+            last-paid: block-height
+        })
+        (map-set assets asset-id 
+            (merge asset {revenue-balance: (+ (get revenue-balance asset) royalty-amount)}))
+        
+        (print {
+            event: "shares-transferred",
+            asset-id: asset-id,
+            from: tx-sender,
+            to: recipient,
+            amount: amount,
+            royalty: royalty-amount
+        })
+        (ok true)
     )
 )
 
-;; Rest of contract functions remain unchanged...
-
-;; New read-only functions for metadata and royalties
+;; Read-only functions for metadata and royalties
 (define-read-only (get-metadata (asset-id uint))
     (get metadata (unwrap! (map-get? assets asset-id) err-invalid-asset))
 )
@@ -138,4 +160,9 @@
             last-paid: (get last-paid payments)
         })
     )
+)
+
+;; New helper function to check ownership
+(define-read-only (get-shares (asset-id uint) (owner principal))
+    (ok (default-to u0 (map-get? shares {asset-id: asset-id, owner: owner})))
 )
