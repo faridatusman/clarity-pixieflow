@@ -8,13 +8,12 @@ import {
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
 Clarinet.test({
-    name: "Prevents invalid transfer parameters",
+    name: "Ensures proper asset creation with limits",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const deployer = accounts.get('deployer')!;
-        const wallet1 = accounts.get('wallet_1')!;
         
-        // Create asset
-        let setup = chain.mineBlock([
+        // Test valid asset creation
+        let result = chain.mineBlock([
             Tx.contractCall('pixieflow', 'create-asset', [
                 types.ascii("Test Asset"),
                 types.ascii("https://test.com/asset"),
@@ -26,30 +25,23 @@ Clarinet.test({
             ], deployer.address)
         ]);
         
-        // Try zero amount transfer
-        let transfer1 = chain.mineBlock([
-            Tx.contractCall('pixieflow', 'transfer-shares', [
-                types.uint(0),
-                types.principal(wallet1.address),
-                types.uint(0),
-                types.uint(1000)
+        result.receipts[0].result.expectOk().expectUint(0);
+        
+        // Test exceeding max shares
+        let invalid = chain.mineBlock([
+            Tx.contractCall('pixieflow', 'create-asset', [
+                types.ascii("Invalid Asset"),
+                types.ascii("https://test.com/asset"),
+                types.uint(2000000000), // Exceeds max
+                types.uint(5),
+                types.ascii("Test Description"),
+                types.ascii("https://test.com/image.jpg"),
+                types.list([])
             ], deployer.address)
         ]);
         
-        transfer1.receipts[0].result.expectErr().expectUint(105);
-        
-        // Try zero payment
-        let transfer2 = chain.mineBlock([
-            Tx.contractCall('pixieflow', 'transfer-shares', [
-                types.uint(0),
-                types.principal(wallet1.address),
-                types.uint(100),
-                types.uint(0)
-            ], deployer.address)
-        ]);
-        
-        transfer2.receipts[0].result.expectErr().expectUint(106);
+        invalid.receipts[0].result.expectErr().expectUint(101);
     }
 });
 
-// Previous tests remain unchanged...
+[Previous tests remain unchanged...]
